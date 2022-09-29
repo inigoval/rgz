@@ -11,7 +11,7 @@ import pandas as pd
 def randomise_by_index(inputlist, idx_list):
 
     """
-       Function to randomize an array of data
+    Function to randomize an array of data
     """
 
     if len(inputlist) != len(idx_list):
@@ -48,9 +48,7 @@ def make_meta(bindir="./rgz20k-batches-py/"):
 # -------------------------------------------------------------
 
 
-def make_batch(
-    df, batch, nbatch, pbatch, imdir="./img/", bindir="./rgz20k-batches-py/"
-):
+def make_batch(df, batch, nbatch, pbatch, imdir="./img/", bindir="./rgz20k-batches-py/"):
 
     if not os.path.exists(bindir):
         os.mkdir(bindir)
