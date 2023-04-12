@@ -1,18 +1,26 @@
 from astropy.io import fits
 from astroquery.skyview import SkyView
-from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astroquery.vizier import Vizier
+import argparse
+import logging
 
 import requests
 
 import numpy as np
 import pandas as pd
-import pylab as pl
-import os, sys
+import os
 from tqdm import tqdm
 from PIL import Image
+
+
+parser = argparse.ArgumentParser(description="Parameters for batching")
+# parser.add_argument("-c", "--clipping", type=bool, default=True, help="Apply clipping")
+parser.add_argument("-d", "--dld", type=bool, default=True, help="Download fits")
+parser.add_argument("-i", "--img", type=bool, default=True, help="Create img files")
+parser.add_argument("-s", "--csv", type=bool, default=True, help="Create csv file")
+args = parser.parse_args()
 
 
 def rescale_image(img, low):
@@ -68,12 +76,10 @@ def get_fits(id, ra, dec, overwrite=True):
         os.mkdir("fits")
 
     fitsname = "fits/FIRST_" + id + ".fits"
-    if overwrite == True or not os.path.exists(fitsname):
+    if overwrite is True or not os.path.exists(fitsname):
 
         sky = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
-        url = SkyView.get_image_list(
-            position=sky, survey=["VLA FIRST (1.4 GHz)"], cache=False
-        )
+        url = SkyView.get_image_list(position=sky, survey=["VLA FIRST (1.4 GHz)"], cache=False)
         try:
             file = requests.get(url[0], allow_redirects=True)
         except:
@@ -113,6 +119,8 @@ def plot_image(fitsfile, ra, dec, maj, low):
     # pl.imshow(img)
     # pl.title("Crop")
 
+    print(img)
+
     # radial crop:
     img = apply_circular_mask(img, maj)
     # pl.subplot(163)
@@ -126,7 +134,7 @@ def plot_image(fitsfile, ra, dec, maj, low):
     # pl.title("NaN")
 
     # subtract 3 sigma noise:
-    img[np.where(img <= low * 1e-3)] = 0.0
+    # img[np.where(img <= low * 1e-3)] = 0.0
     # pl.subplot(165)
     # pl.imshow(img)
     # pl.title("Sigma clip")
@@ -179,9 +187,7 @@ def match_mb(ra, dec, maj):
     while True:
         err = False
         try:
-            result = Vizier.query_region(
-                sky, radius=rad * u.arcsec, catalog=["J/MNRAS/466/4346/table1"]
-            )
+            result = Vizier.query_region(sky, radius=rad * u.arcsec, catalog=["J/MNRAS/466/4346/table1"])
         except requests.exceptions.ConnectionError as e:
             print("CONNECTION ERROR: {}".format(e))
             err = True
@@ -239,9 +245,11 @@ def get_all_imgs(minsize=None, maxsize=None):
             ra = float(item["radio.ra"])
             dec = float(item["radio.dec"])
 
-            # Set low=0 to remove sigma clipping
-            # low = float(item["radio.outermost_level"])
-            low = 0
+            # if args.clipping:
+            #     low = float(item["radio.outermost_level"])
+            # else:
+            #     low = 0
+            low = float(item["radio.outermost_level"])
 
             fitsfile = "fits/FIRST_" + id + ".fits"
 
@@ -273,9 +281,7 @@ def make_csvfile(minsize=None, maxsize=None):
             dec = float(item["radio.dec"])
 
             fitsfile = "fits/FIRST_" + id + ".fits"
-            imgfile = (
-                "./img/" + ".".join(fitsfile.split(".")[0:2]).split("/")[1] + ".png"
-            )
+            imgfile = "./img/" + ".".join(fitsfile.split(".")[0:2]).split("/")[1] + ".png"
 
             isfits = os.path.exists(fitsfile)
             ispng = os.path.exists(imgfile)
@@ -305,17 +311,13 @@ def check_files(n, dir):
 
 if __name__ == "__main__":
 
-    dld_fits = True
-    get_imgs = True
-    make_cat = True
-
-    if dld_fits:
+    if args.dld:
         n = get_all_fits(minsize=15, maxsize=270)
         check_files(n, dir="fits")
 
-    if get_imgs:
+    if args.img:
         n = get_all_imgs(minsize=15, maxsize=270)
         check_files(n, dir="img")
 
-    if make_cat:
+    if args.csv:
         make_csvfile(minsize=15, maxsize=270)

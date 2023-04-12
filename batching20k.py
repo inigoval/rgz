@@ -1,4 +1,4 @@
-import os, sys
+import os
 import pickle
 import numpy as np
 from PIL import Image

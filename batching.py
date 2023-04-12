@@ -1,10 +1,11 @@
-import os, sys
+import os
 import pickle
 import numpy as np
 from PIL import Image
 import hashlib
 import pandas as pd
 import argparse
+from pathlib import Path
 
 
 parser = argparse.ArgumentParser(description="Parameters for batching")
@@ -13,13 +14,17 @@ parser.add_argument("-b", "--batchsize", type=int, default=2000, help="Batch siz
 parser.add_argument("-i", "--imfolder", default="img/", help="Image folder")
 args = parser.parse_args()
 
+n_data = int(args.nbatch * args.batchsize // 1000)
+batch_folder = Path(f"./rgz{n_data}k-batches-py/")
+
+
 # -------------------------------------------------------------
 
 
 def randomise_by_index(inputlist, idx_list):
 
     """
-       Function to randomize an array of data
+    Function to randomize an array of data
     """
 
     if len(inputlist) != len(idx_list):
@@ -35,9 +40,9 @@ def randomise_by_index(inputlist, idx_list):
 # -------------------------------------------------------------
 
 
-def make_meta(bindir="./rgz20k-batches-py/"):
+def make_meta(bindir=batch_folder):
 
-    oname = "batches.meta"
+    oname = Path("batches.meta")
 
     class_labels = [""]
 
@@ -47,7 +52,7 @@ def make_meta(bindir="./rgz20k-batches-py/"):
     }
 
     # write pickled output:
-    with open(bindir + oname, "wb") as f:
+    with open(bindir / oname, "wb") as f:
         pickle.dump(dict, f)
 
     return
@@ -56,21 +61,19 @@ def make_meta(bindir="./rgz20k-batches-py/"):
 # -------------------------------------------------------------
 
 
-def make_batch(
-    df, batch, nbatch, pbatch, imdir="./img/", bindir="./rgz20k-batches-py/"
-):
+def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_folder):
 
-    if not os.path.exists(bindir):
-        os.mkdir(bindir)
+    if not Path.exists(bindir):
+        Path.mkdir(bindir)
 
     if batch == (nbatch - 1):
         # the last batch is the test batch:
-        oname = "test_batch"
+        oname = Path("test_batch")
         batch_label = "testing batch 1 of 1"
     else:
         # everything else is a training batch:
-        oname = "data_batch_" + str(batch + 1)
-        batch_label = "training batch " + str(batch + 1) + " of " + str(nbatch - 1)
+        oname = Path("data_batch_" + str(batch + 1))
+        batch_label = Path("training batch " + str(batch + 1) + " of " + str(nbatch - 1))
 
     src_ids = df["Source ID"].to_numpy()
     files = df["Map File"].to_numpy()
@@ -130,7 +133,7 @@ def make_batch(
         }
 
         # write pickled output:
-        with open(bindir + oname, "wb") as f:
+        with open(bindir / oname, "wb") as f:
             pickle.dump(dict, f)
 
     return
@@ -172,16 +175,16 @@ if __name__ == "__main__":
     make_meta()
 
     # get checksums:
-    batchdir = f"./rgz{args.nbatch*args.batchsize}k-batches-py/"
-    for file in os.listdir(batchdir):
-        checksum = hashlib.md5(open(batchdir + file, "rb").read()).hexdigest()
+    batchdir = batch_folder
+    for file in Path.iterdir(batchdir):
+        checksum = hashlib.md5(open(file, "rb").read()).hexdigest()
         print(file, checksum)
 
     # make tarfile:
-    tarfile = f"rgz{args.nbatch*args.batchsize}k-batches-python.tar.gz"
+    tarfile = f"rgz{n_data}k-batches-python.tar.gz"
     print("-----------------")
     print("Creating tarfile:")
-    os.system("tar -cvzf " + tarfile + " " + batchdir + "*batch* \n")
+    os.system("tar -cvzf " + tarfile + " " + str(batchdir) + "*batch* \n")
     print("-----------------")
     checksum = hashlib.md5(open(tarfile, "rb").read()).hexdigest()
     print("tgz_md5", checksum)
