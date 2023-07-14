@@ -1,0 +1,15 @@
+survey: 'vla_first' 
+  
+create_img: True
+create_csv: True
+  
+duplicate_threshold: 5 # Arcsecond threshold for deduplication
+
+n_batches: 54
+batch_size: 2000
+
+# Size filters for dataset
+min_size: 15
+max_size: 270
+
+crop_size: 150
