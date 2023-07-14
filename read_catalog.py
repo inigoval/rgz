@@ -5,14 +5,18 @@ from astropy import units as u
 from astroquery.vizier import Vizier
 import argparse
 import logging
-
 import requests
-
 import numpy as np
 import pandas as pd
 import os
+import torch
+
+from einops import rearrange
+from torchvision.transforms.functional import center_crop, resize
 from tqdm import tqdm
 from PIL import Image
+from astropy.stats import sigma_clipped_stats
+from utils import create_path
 
 
 parser = argparse.ArgumentParser(description="Parameters for batching")
@@ -20,11 +24,16 @@ parser = argparse.ArgumentParser(description="Parameters for batching")
 parser.add_argument("-d", "--dld", type=bool, default=True, help="Download fits")
 parser.add_argument("-i", "--img", type=bool, default=True, help="Create img files")
 parser.add_argument("-s", "--csv", type=bool, default=True, help="Create csv file")
+parser.add_argument(
+    "-su", "--survey", type=str, default="FIRST", help="Choose which survey to get data from"
+)
 args = parser.parse_args()
 
 
-def rescale_image(img, low):
+survey_strings = {"FIRST": "VLA FIRST (1.4 GHz)", "nvss": "NVSS"}
 
+
+def rescale_image(img, low):
     img_max = np.max(img)
     img_min = low * 1e-3
     # img -= img_min
@@ -36,7 +45,6 @@ def rescale_image(img, low):
 
 
 def crop_centre(img, crop=150):
-
     xsize = np.shape(img)[0]  # image width
     ysize = np.shape(img)[1]  # image height
     startx = xsize // 2 - (crop // 2)
@@ -47,7 +55,6 @@ def crop_centre(img, crop=150):
 
 
 def apply_circular_mask(img, maj, frac=0.6):
-
     centre = (np.rint(img.shape[0] / 2), np.rint(img.shape[1] / 2))
     maj = frac * maj / 1.8  # arcsec --> pixels
 
@@ -62,7 +69,6 @@ def apply_circular_mask(img, maj, frac=0.6):
 
 
 def create_png(image_data, name="", path=""):
-
     im = Image.fromarray(image_data)
     im = im.convert("L")
     im.save(path + name + ".png")
@@ -71,15 +77,17 @@ def create_png(image_data, name="", path=""):
 
 
 def get_fits(id, ra, dec, overwrite=True):
+    create_path("fits", f"fits/{args.survey}")
 
     if not os.path.exists("fits"):
         os.mkdir("fits")
 
-    fitsname = "fits/FIRST_" + id + ".fits"
+    fitsname = f"fits/{args.survey}/" + id + ".fits"
     if overwrite is True or not os.path.exists(fitsname):
-
         sky = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
-        url = SkyView.get_image_list(position=sky, survey=["VLA FIRST (1.4 GHz)"], cache=False)
+        url = SkyView.get_image_list(
+            position=sky, survey=survey_strings[args.survey], cache=False, pixels=150
+        )
         try:
             file = requests.get(url[0], allow_redirects=True)
         except:
@@ -96,7 +104,6 @@ def get_fits(id, ra, dec, overwrite=True):
 
 
 def plot_image(fitsfile, ra, dec, maj, low):
-
     if not os.path.exists("img"):
         os.mkdir("img")
 
@@ -108,18 +115,16 @@ def plot_image(fitsfile, ra, dec, maj, low):
         os.remove(fitsfile)
         return None
 
-    data = np.squeeze(hdu[0].data)
+    img = np.squeeze(hdu[0].data)
     # pl.subplot(161)
     # pl.imshow(data)
     # pl.title("Orig")
 
     # crop centre:
-    img = crop_centre(data, crop=150)
+    img = crop_centre(img, crop=150)
     # pl.subplot(162)
     # pl.imshow(img)
     # pl.title("Crop")
-
-    print(img)
 
     # radial crop:
     img = apply_circular_mask(img, maj)
@@ -127,14 +132,18 @@ def plot_image(fitsfile, ra, dec, maj, low):
     # pl.imshow(img)
     # pl.title("Mask")
 
-    # remove nans:
+    # Remove nans:
     img[np.where(np.isnan(img))] = 0.0
+
+    # Clip background noise
+    _, _, rms = sigma_clipped_stats(img)
+    img[np.where(img <= 3 * rms)] = 0.0
     # pl.subplot(164)
     # pl.imshow(img)
     # pl.title("NaN")
 
     # subtract 3 sigma noise:
-    # img[np.where(img <= low * 1e-3)] = 0.0
+    img[np.where(img <= low * 1e-3)] = 0.0
     # pl.subplot(165)
     # pl.imshow(img)
     # pl.title("Sigma clip")
@@ -147,7 +156,9 @@ def plot_image(fitsfile, ra, dec, maj, low):
     # pl.show()
 
     # create PNG:
-    pngname = "./img/" + ".".join(fitsfile.split(".")[0:2]).split("/")[1]
+    create_path("img", f"img/{args.survey}")
+
+    pngname = f"./img/{args.survey}/" + ".".join(fitsfile.split(".")[0:2]).split("/")[1]
     if np.sum(img) > 0.0:
         create_png(img, name=pngname, path="./")
     else:
@@ -158,7 +169,6 @@ def plot_image(fitsfile, ra, dec, maj, low):
 
 
 def update_csv(id, imgname, majaxis, match, df=None):
-
     info = {
         "Source ID": [id],
         "Map File": [imgname],
@@ -169,7 +179,8 @@ def update_csv(id, imgname, majaxis, match, df=None):
     df_tmp = pd.DataFrame(info, columns=["Source ID", "Map File", "LAS", "MiraBest"])
 
     if isinstance(df, pd.DataFrame):
-        df = df.append(df_tmp, ignore_index=True)
+        # df = df.append(df_tmp, ignore_index=True)
+        df = pd.concat([df, df_tmp], ignore_index=True)
     else:
         df = df_tmp
 
@@ -177,7 +188,6 @@ def update_csv(id, imgname, majaxis, match, df=None):
 
 
 def match_mb(ra, dec, maj):
-
     match = 0
 
     rad = 0.5 * maj
@@ -202,18 +212,15 @@ def match_mb(ra, dec, maj):
 
 
 def get_all_fits(minsize=None, maxsize=None):
-
     filename = "static_rgz_flat_2019-05-06_full.csv"
     data = pd.read_csv(filename)
 
     n = 0
     for i in tqdm(range(len(data))):
-
         item = data.iloc[i, :]
         majaxis = float(item["radio.max_angular_extent"])  # arcsec
 
         if minsize < majaxis < maxsize:
-
             id = str(item["rgz_name"])
 
             ra = float(item["radio.ra"])
@@ -227,19 +234,16 @@ def get_all_fits(minsize=None, maxsize=None):
     return n
 
 
-def get_all_imgs(minsize=None, maxsize=None):
-
+def get_all_imgs(minsize, maxsize):
     filename = "static_rgz_flat_2019-05-06_full.csv"
     data = pd.read_csv(filename)
 
     n = 0
     for i in tqdm(range(len(data))):
-
         item = data.iloc[i, :]
         majaxis = float(item["radio.max_angular_extent"])  # arcsec
 
         if minsize < majaxis < maxsize:
-
             id = str(item["rgz_name"])
 
             ra = float(item["radio.ra"])
@@ -251,7 +255,7 @@ def get_all_imgs(minsize=None, maxsize=None):
             #     low = 0
             low = float(item["radio.outermost_level"])
 
-            fitsfile = "fits/FIRST_" + id + ".fits"
+            fitsfile = f"fits/{args.survey}/" + id + ".fits"
 
             # create the PNG:
             if os.path.exists(fitsfile):
@@ -263,25 +267,22 @@ def get_all_imgs(minsize=None, maxsize=None):
 
 
 def make_csvfile(minsize=None, maxsize=None):
-
     filename = "static_rgz_flat_2019-05-06_full.csv"
     data = pd.read_csv(filename)
 
     n = 0
     df = None
     for i in tqdm(range(len(data))):
-
         item = data.iloc[i, :]
         majaxis = float(item["radio.max_angular_extent"])  # arcsec
 
         if minsize < majaxis < maxsize:
-
             id = str(item["rgz_name"])
             ra = float(item["radio.ra"])
             dec = float(item["radio.dec"])
 
-            fitsfile = "fits/FIRST_" + id + ".fits"
-            imgfile = "./img/" + ".".join(fitsfile.split(".")[0:2]).split("/")[1] + ".png"
+            fitsfile = f"fits/{args.survey}/" + id + ".fits"
+            imgfile = f"./img/{args.survey}/" + ".".join(fitsfile.split(".")[0:2]).split("/")[1] + ".png"
 
             isfits = os.path.exists(fitsfile)
             ispng = os.path.exists(imgfile)
@@ -294,14 +295,16 @@ def make_csvfile(minsize=None, maxsize=None):
 
     # Does dropna() need to be added here?
     df = df[~df.duplicated(["Source ID"])]  # remove duplicates from catalogue
+
     print(f"Data points: {len(df.index)} NaNs: {df.isnull().sum().sum()}")
-    df.to_csv("RGZDR1Images.csv")
+
+    print("\n Writing to .csv file...")
+    df.to_csv(f"RGZDR1Images.csv")
 
     return
 
 
 def check_files(n, dir):
-
     files = os.listdir(dir)
     print("Number of files: {}".format(len(files)))
     print("Expected # of files: {}".format(n))
@@ -310,7 +313,6 @@ def check_files(n, dir):
 
 
 if __name__ == "__main__":
-
     if args.dld:
         n = get_all_fits(minsize=15, maxsize=270)
         check_files(n, dir="fits")

@@ -1,28 +1,30 @@
 import os
 import pickle
 import numpy as np
-from PIL import Image
 import hashlib
 import pandas as pd
 import argparse
+
 from pathlib import Path
+from PIL import Image
+
+from utils import load_config
 
 
 parser = argparse.ArgumentParser(description="Parameters for batching")
 parser.add_argument("-n", "--nbatch", type=int, default=54, help="# of batches")
 parser.add_argument("-b", "--batchsize", type=int, default=2000, help="Batch size")
 parser.add_argument("-i", "--imfolder", default="img/", help="Image folder")
+parser.add_argument(
+    "-su", "--survey", type=str, default="FIRST", help="Choose which survey to get data from"
+)
 args = parser.parse_args()
-
-n_data = int(args.nbatch * args.batchsize // 1000)
-batch_folder = Path(f"./rgz{n_data}k-batches-py/")
 
 
 # -------------------------------------------------------------
 
 
 def randomise_by_index(inputlist, idx_list):
-
     """
     Function to randomize an array of data
     """
@@ -40,10 +42,7 @@ def randomise_by_index(inputlist, idx_list):
 # -------------------------------------------------------------
 
 
-def make_meta(bindir=batch_folder):
-
-    oname = Path("batches.meta")
-
+def make_meta(path):
     class_labels = [""]
 
     # create dictionary of batch:
@@ -52,7 +51,7 @@ def make_meta(bindir=batch_folder):
     }
 
     # write pickled output:
-    with open(bindir / oname, "wb") as f:
+    with open(path / "batches" / "batches.meta", "wb") as f:
         pickle.dump(dict, f)
 
     return
@@ -61,24 +60,28 @@ def make_meta(bindir=batch_folder):
 # -------------------------------------------------------------
 
 
-def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_folder):
+def make_batch(path, df, batch, n_batches, pbatch):
+    png_dir = path / "PNG"
+    batch_dir = path / "batches"
 
-    if not Path.exists(bindir):
-        Path.mkdir(bindir)
+    if not Path.exists(batch_dir):
+        Path.mkdir(batch_dir)
 
-    if batch == (nbatch - 1):
+    if batch == (n_batches - 1):
         # the last batch is the test batch:
         oname = Path("test_batch")
         batch_label = "testing batch 1 of 1"
     else:
         # everything else is a training batch:
         oname = Path("data_batch_" + str(batch + 1))
-        batch_label = Path("training batch " + str(batch + 1) + " of " + str(nbatch - 1))
+        batch_label = Path("training batch " + str(batch + 1) + " of " + str(n_batches - 1))
 
     src_ids = df["Source ID"].to_numpy()
     files = df["Map File"].to_numpy()
     mbflag = df["MiraBest"].to_numpy()
     las = df["LAS"].to_numpy()
+    ra = df["radio.ra"].to_numpy()
+    dec = df["radio.dec"].to_numpy()
 
     # create empty arrays for the batches:
     ids = []
@@ -86,6 +89,8 @@ def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_fol
     filenames = []
     mbflags = []
     sizes = []
+    ra = []
+    dec = []
 
     i0 = (pbatch * batch) - 1
     i = i0
@@ -102,11 +107,13 @@ def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_fol
             filenames.append(filename)
             mbflags.append(flag)
             sizes.append(size)
+            ra.append(ra[i])
+            dec.append(dec[i])
 
             id = src_ids[i]
             ids.append(id)
 
-            im = Image.open(imdir + filename)
+            im = Image.open(png_dir + filename)
             im = np.array(im).flatten()
             filedata = np.array(list(im), np.uint8)
             data.append(filedata)
@@ -121,6 +128,8 @@ def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_fol
         filenames = randomise_by_index(filenames, idx_list)
         mbflags = randomise_by_index(mbflags, idx_list)
         sizes = randomise_by_index(sizes, idx_list)
+        ra = randomise_by_index(ra, idx_list)
+        dec = randomise_by_index(dec, idx_list)
 
         # create dictionary of batch:
         dict = {
@@ -130,10 +139,12 @@ def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_fol
             "src_ids": ids,
             "mb_flag": mbflags,
             "LAS": sizes,
+            "ra": ra,
+            "dec": dec,
         }
 
         # write pickled output:
-        with open(bindir / oname, "wb") as f:
+        with open(batch_dir / oname, "wb") as f:
             pickle.dump(dict, f)
 
     return
@@ -142,17 +153,13 @@ def make_batch(df, batch, nbatch, pbatch, imdir=Path("./img/"), bindir=batch_fol
 # -------------------------------------------------------------
 
 
-def make_batches(df, imdir="./img/"):
-
-    nbatch = args.nbatch
-    pbatch = args.batchsize
-
+def make_batches(path, df, n_batches, batch_size):
     n_obj = len(df) - df[df["Map File"] == "No file"].shape[0]
 
-    assert (n_obj) > (pbatch * (nbatch - 1))
+    assert (n_obj) > (batch_size * (n_batches - 1))
 
-    for batch in range(nbatch):
-        make_batch(df, batch, nbatch, pbatch, imdir)
+    for batch in range(n_batches):
+        make_batch(path, df, batch, n_batches, batch_size)
 
     return
 
@@ -164,15 +171,21 @@ def make_batches(df, imdir="./img/"):
 # -------------------------------------------------------------
 
 if __name__ == "__main__":
+    config = load_config()
+
+    n_data = int(args.nbatch * args.batchsize // 1000)
+    batch_folder = Path(f"./rgz{n_data}k-{args.survey}-batches-py/")
 
     csvfile = "RGZDR1Images.csv"
     df = pd.read_csv(csvfile)
 
+    dir = Path("rgz" / config["survey"])
+
     # make batched data:
-    make_batches(df, imdir="./" + args.imfolder)
+    make_batches(dir, df, config["n_batches"], config["batch_size"])
 
     # make meta data:
-    make_meta()
+    make_meta(dir)
 
     # get checksums:
     batchdir = batch_folder
